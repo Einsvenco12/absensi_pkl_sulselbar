@@ -5,7 +5,7 @@ Fitur:
 - Absen MASUK saja (tidak ada absen pulang): foto selfie + lokasi GPS
 - Login PIN per peserta (dibuat admin)
 - Cek lokasi: harus di sekitar gedung yang terdaftar untuk peserta (A / B)
-- Setiap peserta juga punya Divisi (bebas teks, diisi admin)
+- Setiap peserta juga punya Divisi (dipilih dari daftar, Gedung ikut otomatis)
 - Batas waktu: absen masuk hanya bisa sebelum jam BATAS_JAM_MASUK
 - Uang makan Rp15.000 otomatis saat absen masuk berhasil
 - Blokir absen dobel di hari yang sama
@@ -36,17 +36,18 @@ from streamlit_js_eval import get_geolocation
 # ------------------------------------------------------------------
 UANG_MAKAN = 15000
 
-# GANTI dengan koordinat asli (copy dari Google Maps: klik kanan di titik gedung)
+# Koordinat asli Gedung A dan B Bank Sulselbar
 GEDUNG_COORD = {
-    "A": (-5.150070542826675, 119.41568236911743),  # koordinat asli Gedung A
-    "B": (-5.150163347858429, 119.41329137592547),  # koordinat asli Gedung B
+    "A": (-5.150070542826675, 119.41568236911743),  # (latitude, longitude)
+    "B": (-5.150163347858429, 119.41329137592547),  # (latitude, longitude)
 }
 
 RADIUS_METER = 150  # area longgar di sekitar gedung (bukan angka ketat)
 
-# GANTI dengan daftar Divisi asli beserta gedungnya ("A" atau "B").
+# Daftar Divisi asli beserta gedungnya ("A" atau "B").
 # Peserta tinggal pilih Divisi, Gedung otomatis ikut sesuai daftar ini.
 DIVISI_GEDUNG = {
+    # Gedung A
     "Divisi Korporasi dan Komersial": "A",
     "Divisi Ritel dan Konsumer": "A",
     "Divisi Corporate Secretary (CORSEC)": "A",
@@ -58,6 +59,7 @@ DIVISI_GEDUNG = {
     "Divisi International Banking": "A",
     "Divisi Digitalisasi dan Layanan": "A",
     "Divisi Umum": "A",
+    # Gedung B
     "Divisi Kepatuhan": "B",
     "Divisi Dana dan Jasa": "B",
     "Divisi Syariah": "B",
@@ -277,8 +279,11 @@ def halaman_absen(eng):
     nama = st.selectbox("Nama", df["nama"])
     row = df.loc[df["nama"] == nama].iloc[0]
     gedung, divisi = row["gedung"], row["divisi"]
-    st.caption(f"Terdaftar di: Gedung {gedung}" + (f" • Divisi {divisi}" if divisi else ""))
-    st.caption(f"Batas absen masuk: sebelum jam {BATAS_JAM_MASUK.strftime('%H:%M')} WITA")
+    st.text_input(
+        "Gedung & Divisi (terdaftar, tidak bisa diubah)",
+        value=f"Gedung {gedung} • {divisi}",
+        disabled=True,
+    )
 
     pin = st.text_input("PIN", type="password", max_chars=6)
 
