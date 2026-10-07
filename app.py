@@ -117,6 +117,10 @@ def get_engine():
     url = secret("database_url")
     if url:
         url = url.replace("postgres://", "postgresql://", 1)
+        # Paksa driver psycopg2 secara eksplisit, supaya SQLAlchemy tidak
+        # mencoba driver lain (mis. psycopg v3) yang belum tentu terinstall.
+        if url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
         eng = create_engine(url, pool_pre_ping=True, pool_recycle=300)
     else:
         # nama file baru (v2) supaya tidak bentrok dengan database versi lama
