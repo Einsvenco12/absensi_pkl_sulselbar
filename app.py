@@ -2,6 +2,7 @@
 Aplikasi Absensi Peserta PKL - Bank Sulselbar (versi siap deploy)
 =================================================================
 Fitur:
+- Layar awal: pilih masuk sebagai Peserta PKL (hanya halaman absen) atau Admin
 - Absen MASUK saja (tidak ada absen pulang): foto selfie + lokasi GPS
 - Login PIN per peserta (dibuat admin)
 - Cek lokasi: harus di sekitar gedung yang terdaftar untuk peserta (A / B)
@@ -67,7 +68,7 @@ DIVISI_GEDUNG = {
     "Divisi SKAI": "B",
 }
 
-BATAS_JAM_MASUK = dtime(16, 0)  # absen masuk harus sebelum jam ini (WITA), lewat = ditolak
+BATAS_JAM_MASUK = dtime(8, 0)  # absen masuk harus sebelum jam ini (WITA), lewat = ditolak
 
 WITA = timezone(timedelta(hours=8))  # server cloud pakai UTC, jadi jam dipaksa WITA
 
@@ -555,26 +556,75 @@ def halaman_foto(eng):
 # ------------------------------------------------------------------
 # MAIN
 # ------------------------------------------------------------------
-def main():
-    st.set_page_config(page_title="Absensi PKL - Bank Sulselbar", page_icon="📍")
-    eng = get_engine()
+def pilih_peran(peran):
+    st.session_state.peran = peran
+    st.rerun()
 
-    st.sidebar.title("Absensi PKL")
-    menu = st.sidebar.radio("Menu", ["Absen", "Kelola Peserta (admin)", "Rekap & Export (admin)", "Bukti Foto (admin)"])
 
-    if menu == "Absen":
-        halaman_absen(eng)
-    elif menu.startswith("Kelola"):
+def halaman_awal():
+    """Layar pertama: pilih masuk sebagai Peserta PKL atau Admin."""
+    st.title("📍 Absensi PKL")
+    st.caption("Bank Sulselbar")
+    st.write("")
+
+    kiri, kanan = st.columns(2)
+    with kiri:
+        with st.container(border=True):
+            st.subheader("👤 Peserta PKL")
+            st.caption("Absen masuk dengan foto selfie dan lokasi.")
+            if st.button("Masuk sebagai Peserta", type="primary", width="stretch", key="pilih_peserta"):
+                pilih_peran("user")
+    with kanan:
+        with st.container(border=True):
+            st.subheader("🔐 Admin")
+            st.caption("Kelola peserta, lihat rekap, download Excel, dan cek bukti foto.")
+            if st.button("Masuk sebagai Admin", width="stretch", key="pilih_admin"):
+                pilih_peran("admin")
+
+
+def halaman_admin(eng):
+    """Area admin: login dulu, lalu menu Kelola Peserta / Rekap / Bukti Foto."""
+    if not st.session_state.get("admin_ok"):
+        if st.button("← Kembali", key="kembali_admin"):
+            pilih_peran(None)
+        st.header("🔐 Login Admin")
+        admin_login()
+        return
+
+    kiri, kanan = st.columns([4, 1])
+    kiri.caption("Masuk sebagai admin")
+    if kanan.button("Keluar", key="keluar_admin", width="stretch"):
+        st.session_state.admin_ok = False
+        pilih_peran(None)
+
+    menu = st.radio(
+        "Menu admin",
+        ["Kelola Peserta", "Rekap & Export", "Bukti Foto"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="menu_admin",
+    )
+    if menu == "Kelola Peserta":
         halaman_kelola_peserta(eng)
-    elif menu.startswith("Rekap"):
+    elif menu == "Rekap & Export":
         halaman_rekap(eng)
     else:
         halaman_foto(eng)
 
-    if st.session_state.get("admin_ok"):
-        if st.sidebar.button("Keluar admin"):
-            st.session_state.admin_ok = False
-            st.rerun()
+
+def main():
+    st.set_page_config(page_title="Absensi PKL - Bank Sulselbar", page_icon="📍")
+    eng = get_engine()
+
+    peran = st.session_state.get("peran")
+    if peran == "user":
+        if st.button("← Kembali", key="kembali_user"):
+            pilih_peran(None)
+        halaman_absen(eng)
+    elif peran == "admin":
+        halaman_admin(eng)
+    else:
+        halaman_awal()
 
 
 if __name__ == "__main__":
