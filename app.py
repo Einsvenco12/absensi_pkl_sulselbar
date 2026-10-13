@@ -39,7 +39,7 @@ UANG_MAKAN = 15000
 
 # Koordinat asli Gedung A dan B Bank Sulselbar
 GEDUNG_COORD = {
-    "A": (-5.150070542826675, 119.41568236911743),  # (latitude, longitude)
+    "A": (-5.1164911547868, 119.51684816101282),  # (latitude, longitude)
     "B": (-5.150163347858429, 119.41329137592547),  # (latitude, longitude)
 }
 
