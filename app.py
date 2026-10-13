@@ -68,7 +68,7 @@ DIVISI_GEDUNG = {
     "Divisi SKAI": "B",
 }
 
-BATAS_JAM_MASUK = dtime(20, 0)  # absen masuk harus sebelum jam ini (WITA), lewat = ditolak
+BATAS_JAM_MASUK = dtime(24, 0)  # absen masuk harus sebelum jam ini (WITA), lewat = ditolak
 
 WITA = timezone(timedelta(hours=8))  # server cloud pakai UTC, jadi jam dipaksa WITA
 
