@@ -2,7 +2,7 @@
 Aplikasi Absensi Peserta PKL - Bank Sulselbar (versi siap deploy)
 =================================================================
 Fitur:
-- Layar awal: pilih masuk sebagai Peserta PKL (hanya halaman absen) atau Admin
+- Layar login di awal: pilih peran. Peserta (nama + PIN) -> halaman absen saja; Admin (password) -> area admin
 - Absen MASUK saja (tidak ada absen pulang): foto selfie + lokasi GPS
 - Login PIN per peserta (dibuat admin)
 - Cek lokasi: harus di sekitar gedung yang terdaftar untuk peserta (A / B)
@@ -281,16 +281,32 @@ def kompres_foto(data: bytes) -> bytes:
 # ------------------------------------------------------------------
 # ADMIN LOGIN
 # ------------------------------------------------------------------
+def password_admin():
+    """Password admin yang berlaku. None = belum diatur di Secrets (mode cloud)."""
+    pw = secret("admin_password")
+    if pw:
+        return str(pw)
+    if secret("database_url"):
+        return None
+    return "admin123"  # mode lokal (tanpa database cloud)
+
+
+def cek_pin(eng, nama, pin):
+    peserta = get_peserta(eng, nama)
+    return peserta is not None and hmac.compare_digest(peserta["pin_hash"], hash_pin(nama, pin))
+
+
 def admin_login():
+    """Penjaga halaman admin. Login normal lewat layar login di awal; ini cadangan
+    kalau halaman admin terbuka tanpa lewat login."""
     if st.session_state.get("admin_ok"):
         return True
 
-    pw_benar = secret("admin_password")
-    if not pw_benar:
-        if secret("database_url"):
-            st.error("admin_password belum diatur di Secrets. Hubungi pengelola aplikasi.")
-            return False
-        pw_benar = "admin123"
+    pw_benar = password_admin()
+    if pw_benar is None:
+        st.error("admin_password belum diatur di Secrets. Hubungi pengelola aplikasi.")
+        return False
+    if not secret("admin_password") and not secret("database_url"):
         st.info("Mode lokal: password admin default = admin123")
 
     pw = st.text_input("Password admin", type="password")
@@ -306,24 +322,21 @@ def admin_login():
 # ------------------------------------------------------------------
 # HALAMAN: ABSEN (untuk peserta PKL)
 # ------------------------------------------------------------------
-def halaman_absen(eng):
+def halaman_absen(eng, nama):
     st.header("📍 Absen PKL")
 
-    df = list_peserta(eng)
-    if df.empty:
-        st.warning("Belum ada peserta terdaftar. Hubungi admin untuk didaftarkan.")
+    peserta = get_peserta(eng, nama)
+    if peserta is None:
+        st.error("Data kamu tidak ditemukan (mungkin sudah dihapus admin). Silakan keluar lalu hubungi admin.")
         return
+    gedung, divisi = peserta["gedung"], peserta["divisi"]
 
-    nama = st.selectbox("Nama", df["nama"])
-    row = df.loc[df["nama"] == nama].iloc[0]
-    gedung, divisi = row["gedung"], row["divisi"]
+    st.text_input("Nama", value=nama, disabled=True)
     st.text_input(
         "Gedung & Divisi (terdaftar, tidak bisa diubah)",
         value=f"Gedung {gedung} • {divisi}",
         disabled=True,
     )
-
-    pin = st.text_input("PIN", type="password", max_chars=6)
 
     lokasi = get_geolocation()
     coords = (lokasi or {}).get("coords")
@@ -340,11 +353,6 @@ def halaman_absen(eng):
             return
         if foto is None:
             st.error("Foto belum diambil.")
-            return
-
-        peserta = get_peserta(eng, nama)
-        if peserta is None or not hmac.compare_digest(peserta["pin_hash"], hash_pin(nama, pin)):
-            st.error("PIN salah.")
             return
 
         now = datetime.now(WITA)
@@ -556,46 +564,61 @@ def halaman_foto(eng):
 # ------------------------------------------------------------------
 # MAIN
 # ------------------------------------------------------------------
-def pilih_peran(peran):
-    st.session_state.peran = peran
+def keluar():
+    """Logout: hapus peran & data login, kembali ke layar login."""
+    for k in ("peran", "nama_login", "admin_ok"):
+        st.session_state.pop(k, None)
     st.rerun()
 
 
-def halaman_awal():
-    """Layar pertama: pilih masuk sebagai Peserta PKL atau Admin."""
+def halaman_login(eng):
+    """Layar pertama: pilih peran, lalu login. Peserta -> halaman absen, Admin -> area admin."""
     st.title("📍 Absensi PKL")
     st.caption("Bank Sulselbar")
-    st.write("")
 
-    kiri, kanan = st.columns(2)
-    with kiri:
-        with st.container(border=True):
-            st.subheader("👤 Peserta PKL")
-            st.caption("Absen masuk dengan foto selfie dan lokasi.")
-            if st.button("Masuk sebagai Peserta", type="primary", width="stretch", key="pilih_peserta"):
-                pilih_peran("user")
-    with kanan:
-        with st.container(border=True):
-            st.subheader("🔐 Admin")
-            st.caption("Kelola peserta, lihat rekap, download Excel, dan cek bukti foto.")
-            if st.button("Masuk sebagai Admin", width="stretch", key="pilih_admin"):
-                pilih_peran("admin")
+    peran = st.radio("Masuk sebagai", ["Peserta PKL", "Admin"], horizontal=True, key="login_peran")
+
+    if peran == "Peserta PKL":
+        df = list_peserta(eng)
+        if df.empty:
+            st.warning("Belum ada peserta terdaftar. Hubungi admin untuk didaftarkan.")
+            return
+        with st.form("login_peserta"):
+            nama = st.selectbox("Nama", df["nama"])
+            pin = st.text_input("PIN", type="password", max_chars=6)
+            kirim = st.form_submit_button("Masuk", type="primary", width="stretch")
+        if kirim:
+            if cek_pin(eng, nama, pin):
+                st.session_state.peran = "user"
+                st.session_state.nama_login = nama
+                st.rerun()
+            else:
+                st.error("PIN salah.")
+    else:
+        pw_benar = password_admin()
+        if pw_benar is None:
+            st.error("admin_password belum diatur di Secrets. Hubungi pengelola aplikasi.")
+            return
+        if not secret("admin_password") and not secret("database_url"):
+            st.info("Mode lokal: password admin default = admin123")
+        with st.form("login_admin"):
+            pw = st.text_input("Password admin", type="password")
+            kirim = st.form_submit_button("Masuk", type="primary", width="stretch")
+        if kirim:
+            if hmac.compare_digest(pw, pw_benar):
+                st.session_state.peran = "admin"
+                st.session_state.admin_ok = True
+                st.rerun()
+            else:
+                st.error("Password salah.")
 
 
 def halaman_admin(eng):
-    """Area admin: login dulu, lalu menu Kelola Peserta / Rekap / Bukti Foto."""
-    if not st.session_state.get("admin_ok"):
-        if st.button("← Kembali", key="kembali_admin"):
-            pilih_peran(None)
-        st.header("🔐 Login Admin")
-        admin_login()
-        return
-
+    """Area admin (setelah login): Kelola Peserta / Rekap / Bukti Foto."""
     kiri, kanan = st.columns([4, 1])
     kiri.caption("Masuk sebagai admin")
     if kanan.button("Keluar", key="keluar_admin", width="stretch"):
-        st.session_state.admin_ok = False
-        pilih_peran(None)
+        keluar()
 
     menu = st.radio(
         "Menu admin",
@@ -617,14 +640,17 @@ def main():
     eng = get_engine()
 
     peran = st.session_state.get("peran")
-    if peran == "user":
-        if st.button("← Kembali", key="kembali_user"):
-            pilih_peran(None)
-        halaman_absen(eng)
-    elif peran == "admin":
+    nama = st.session_state.get("nama_login")
+    if peran == "user" and nama:
+        kiri, kanan = st.columns([4, 1])
+        kiri.caption(f"Masuk sebagai {nama}")
+        if kanan.button("Keluar", key="keluar_user", width="stretch"):
+            keluar()
+        halaman_absen(eng, nama)
+    elif peran == "admin" and st.session_state.get("admin_ok"):
         halaman_admin(eng)
     else:
-        halaman_awal()
+        halaman_login(eng)
 
 
 if __name__ == "__main__":
