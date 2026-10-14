@@ -3,12 +3,13 @@ Aplikasi Absensi Peserta PKL - Bank Sulselbar (versi siap deploy)
 =================================================================
 Fitur:
 - Layar login di awal: pilih peran. Peserta (nama + PIN) -> halaman absen saja; Admin (password) -> area admin
-- Absen MASUK saja (tidak ada absen pulang): foto selfie + lokasi GPS
+- Absen MASUK lalu PULANG: foto selfie + lokasi GPS (urutan otomatis)
 - Login PIN per peserta (dibuat admin)
 - Cek lokasi: harus di sekitar gedung yang terdaftar untuk peserta (A / B)
 - Setiap peserta juga punya Divisi (dipilih dari daftar, Gedung ikut otomatis)
 - Batas waktu: absen masuk hanya bisa sebelum jam BATAS_JAM_MASUK
-- Uang makan Rp15.000 otomatis saat absen masuk berhasil
+- Lokasi dan waktu absensi hanya dilihat admin (peserta tidak melihat jarak/koordinat)
+- Uang makan Rp15.000 otomatis saat absen PULANG berhasil; admin melihat akumulasinya per hari
 - Blokir absen dobel di hari yang sama
 - Admin (pakai password): kelola peserta, rekap + grafik + export Excel, bukti foto
 - Database: SQLite (lokal) atau Postgres/Supabase (cloud) - otomatis
@@ -16,6 +17,7 @@ Fitur:
 Jalanin lokal:   streamlit run app.py
 """
 
+import calendar
 import hashlib
 import hmac
 import io
@@ -39,8 +41,8 @@ UANG_MAKAN = 15000
 
 # Koordinat asli Gedung A dan B Bank Sulselbar
 GEDUNG_COORD = {
-    "A": (-5.1164911547868, 119.51684816101282),  # (latitude, longitude)
-    "B": (-5.147453606311076, 119.4293639296109),  # (latitude, longitude)
+    "A": (-5.150070542826675, 119.41568236911743),  # (latitude, longitude)
+    "B": (-5.150163347858429, 119.41329137592547),  # (latitude, longitude)
 }
 
 RADIUS_METER = 150  # area longgar di sekitar gedung (bukan angka ketat)
@@ -68,9 +70,12 @@ DIVISI_GEDUNG = {
     "Divisi SKAI": "B",
 }
 
-BATAS_JAM_MASUK = dtime(23, 0)  # absen masuk harus sebelum jam ini (WITA), lewat = ditolak
+BATAS_JAM_MASUK = dtime(8, 0)  # absen masuk harus sebelum jam ini (WITA), lewat = ditolak
 
 WITA = timezone(timedelta(hours=8))  # server cloud pakai UTC, jadi jam dipaksa WITA
+
+BULAN_ID = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus",
+            "September", "Oktober", "November", "Desember"]
 
 
 # ------------------------------------------------------------------
@@ -213,7 +218,8 @@ def get_absensi_bulan(eng, tahun, bulan):
     q = (
         select(
             absensi_t.c.nama, absensi_t.c.tanggal, absensi_t.c.jam, absensi_t.c.jenis,
-            absensi_t.c.status, absensi_t.c.jarak, absensi_t.c.uang_makan,
+            absensi_t.c.status, absensi_t.c.jarak, absensi_t.c.lat, absensi_t.c.lon,
+            absensi_t.c.uang_makan,
         )
         .where(absensi_t.c.tanggal.like(prefix + "%"))
         .order_by(absensi_t.c.tanggal, absensi_t.c.jam)
@@ -260,12 +266,192 @@ def beri_nomor(df):
     return df
 
 
-def excel_bytes(rekap, detail):
-    """Bangun file Excel (2 sheet) dari tabel rekap & detail, kolom No mulai dari 1."""
+def rupiah(n):
+    return f"Rp{int(n):,}".replace(",", ".")
+
+
+def rekap_peserta(df):
+    """Per peserta: hari hadir (absen masuk berhasil), hari pulang, total uang makan."""
+    ok = df[df["status"] == "berhasil"]
+    masuk = ok[ok["jenis"] == "masuk"].groupby("nama")["tanggal"].nunique()
+    pulang = ok[ok["jenis"] == "pulang"].groupby("nama")["tanggal"].nunique()
+    uang = ok.groupby("nama")["uang_makan"].sum()
+    out = pd.DataFrame({"Hari Hadir": masuk, "Hari Pulang": pulang, "Total Uang Makan": uang})
+    out = out.fillna(0).astype(int).sort_index()
+    out.index.name = "Nama"
+    return out.reset_index()
+
+
+def rekap_harian(df):
+    """Per tanggal: jumlah peserta masuk/pulang, uang makan hari itu, dan akumulasinya."""
+    ok = df[df["status"] == "berhasil"]
+    out = pd.DataFrame({
+        "Hadir": ok[ok["jenis"] == "masuk"].groupby("tanggal")["nama"].nunique(),
+        "Pulang": ok[ok["jenis"] == "pulang"].groupby("tanggal")["nama"].nunique(),
+        "Uang Makan Hari Ini": ok.groupby("tanggal")["uang_makan"].sum(),
+    }).fillna(0).astype(int).sort_index()
+    out["Akumulasi Uang Makan"] = out["Uang Makan Hari Ini"].cumsum()
+    out.index.name = "Tanggal"
+    return out.reset_index()
+
+
+def matriks_kehadiran(df, peserta_df, tahun, bulan):
+    """Rekapan kehadiran: baris = peserta, kolom = tanggal 1..akhir bulan.
+    ✓ = absen masuk & pulang, M = hanya absen masuk, kosong = tidak hadir."""
+    jumlah_hari = calendar.monthrange(tahun, bulan)[1]
+    hari = [str(d) for d in range(1, jumlah_hari + 1)]
+    kolom = ["Nama", "Gedung", "Divisi"] + hari + ["Hadir", "Total Uang Makan"]
+    ok = df[df["status"] == "berhasil"]
+    info = peserta_df.set_index("nama")
+    baris = []
+    for nama in sorted(set(peserta_df["nama"]) | set(ok["nama"])):
+        sub = ok[ok["nama"] == nama]
+        masuk = {int(t[8:10]) for t in sub[sub["jenis"] == "masuk"]["tanggal"]}
+        pulang = {int(t[8:10]) for t in sub[sub["jenis"] == "pulang"]["tanggal"]}
+        row = {
+            "Nama": nama,
+            "Gedung": info["gedung"].get(nama, "-"),
+            "Divisi": info["divisi"].get(nama, "-"),
+        }
+        for d in range(1, jumlah_hari + 1):
+            if d in masuk and d in pulang:
+                row[str(d)] = "✓"
+            elif d in masuk:
+                row[str(d)] = "M"
+            elif d in pulang:
+                row[str(d)] = "P"
+            else:
+                row[str(d)] = ""
+        row["Hadir"] = len(masuk)
+        row["Total Uang Makan"] = int(sub["uang_makan"].sum())
+        baris.append(row)
+    return pd.DataFrame(baris, columns=kolom)
+
+
+def tabel_detail(df):
+    """Detail semua absensi termasuk lokasi & waktu (hanya untuk admin)."""
+    d = df.copy()
+    d["Peta"] = [
+        f"https://www.google.com/maps?q={la},{lo}" if pd.notna(la) and pd.notna(lo) else ""
+        for la, lo in zip(d["lat"], d["lon"])
+    ]
+    d["lat"], d["lon"], d["jarak"] = d["lat"].round(6), d["lon"].round(6), d["jarak"].round(0)
+    d["jenis"] = d["jenis"].str.capitalize()
+    d["status"] = d["status"].map({"berhasil": "Berhasil", "gagal_lokasi": "Gagal (di luar area)"}).fillna(d["status"])
+    d = d.rename(columns={
+        "nama": "Nama", "tanggal": "Tanggal", "jam": "Jam", "jenis": "Jenis", "status": "Status",
+        "jarak": "Jarak ke Gedung (m)", "lat": "Latitude", "lon": "Longitude", "uang_makan": "Uang Makan",
+    })
+    return d[["Nama", "Tanggal", "Jam", "Jenis", "Status", "Jarak ke Gedung (m)",
+              "Latitude", "Longitude", "Uang Makan", "Peta"]]
+
+
+KOLOM_RUPIAH = {"Total Uang Makan", "Uang Makan Hari Ini", "Akumulasi Uang Makan", "Uang Makan"}
+
+
+def _tulis_sheet(writer, nama_sheet, df, judul, periode, keterangan=None, total_kolom=()):
+    """Tulis satu sheet Excel dengan judul, header berwarna, border, lebar kolom, dan baris TOTAL."""
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+    n = beri_nomor(df)
+    n.to_excel(writer, sheet_name=nama_sheet, startrow=3)
+    ws = writer.sheets[nama_sheet]
+
+    header_row, jumlah_baris = 4, len(df)
+    nama_kolom = ["No"] + list(df.columns)
+    garis = Side(style="thin", color="999999")
+    border = Border(left=garis, right=garis, top=garis, bottom=garis)
+
+    ws["A1"] = judul
+    ws["A1"].font = Font(bold=True, size=14)
+    ws["A2"] = periode
+    ws["A2"].font = Font(size=11)
+    if keterangan:
+        ws["A3"] = keterangan
+        ws["A3"].font = Font(italic=True, size=10, color="555555")
+
+    for i, nm in enumerate(nama_kolom, start=1):
+        c = ws.cell(row=header_row, column=i)
+        c.fill = PatternFill("solid", fgColor="1F4E79")
+        c.font = Font(bold=True, color="FFFFFF")
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        c.border = border
+
+    for r in range(header_row + 1, header_row + 1 + jumlah_baris):
+        for i, nm in enumerate(nama_kolom, start=1):
+            c = ws.cell(row=r, column=i)
+            c.border = border
+            if nm in KOLOM_RUPIAH:
+                c.number_format = '"Rp"#,##0'
+            if nm.isdigit() or nm == "No":
+                c.alignment = Alignment(horizontal="center")
+
+    if total_kolom and jumlah_baris:
+        r = header_row + jumlah_baris + 1
+        ws.cell(row=r, column=2, value="TOTAL")
+        for nm in total_kolom:
+            if nm in df.columns:
+                c = ws.cell(row=r, column=nama_kolom.index(nm) + 1, value=int(df[nm].sum()))
+                if nm in KOLOM_RUPIAH:
+                    c.number_format = '"Rp"#,##0'
+        for i in range(1, len(nama_kolom) + 1):
+            c = ws.cell(row=r, column=i)
+            c.font = Font(bold=True)
+            c.fill = PatternFill("solid", fgColor="DDEBF7")
+            c.border = border
+
+    if "Peta" in nama_kolom:  # tautan Google Maps (khusus lembar Detail)
+        kol = nama_kolom.index("Peta") + 1
+        for r in range(header_row + 1, header_row + 1 + jumlah_baris):
+            c = ws.cell(row=r, column=kol)
+            if c.value:
+                c.hyperlink = c.value
+                c.value = "Buka peta"
+                c.font = Font(color="0563C1", underline="single")
+
+    for i, nm in enumerate(nama_kolom, start=1):
+        huruf = ws.cell(row=header_row, column=i).column_letter
+        if nm.isdigit():
+            ws.column_dimensions[huruf].width = 4.5
+        else:
+            isi = [len(str(nm))] + [len(str(v)) for v in n.iloc[:, i - 2]] if i > 1 else [4]
+            ws.column_dimensions[huruf].width = min(max(isi) + 3, 42)
+
+    ws.freeze_panes = ws.cell(row=header_row + 1, column=3)
+    ws.page_setup.orientation = "landscape"
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+
+
+def excel_bytes(df, peserta_df, tahun, bulan):
+    """Excel siap pakai (4 lembar): Rekap Kehadiran, Uang Makan Harian, Rekap per Peserta, Detail Absensi."""
+    periode = f"Periode: {BULAN_ID[bulan - 1]} {tahun}"
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        beri_nomor(rekap).to_excel(w, sheet_name="Rekap Uang Makan")
-        beri_nomor(detail).to_excel(w, sheet_name="Detail Absensi")
+        _tulis_sheet(
+            w, "Rekap Kehadiran", matriks_kehadiran(df, peserta_df, tahun, bulan),
+            "REKAP KEHADIRAN PESERTA PKL - BANK SULSELBAR", periode,
+            "Keterangan: ✓ = absen masuk dan pulang | M = hanya absen masuk (belum/tidak pulang) | kosong = tidak hadir",
+            total_kolom=("Hadir", "Total Uang Makan"),
+        )
+        _tulis_sheet(
+            w, "Uang Makan Harian", rekap_harian(df),
+            "AKUMULASI UANG MAKAN HARIAN PESERTA PKL - BANK SULSELBAR", periode,
+            "Uang makan dihitung saat peserta berhasil absen pulang.",
+            total_kolom=("Hadir", "Pulang", "Uang Makan Hari Ini"),
+        )
+        _tulis_sheet(
+            w, "Rekap per Peserta", rekap_peserta(df),
+            "REKAP PER PESERTA PKL - BANK SULSELBAR", periode,
+            total_kolom=("Hari Hadir", "Hari Pulang", "Total Uang Makan"),
+        )
+        _tulis_sheet(
+            w, "Detail Absensi", tabel_detail(df),
+            "DETAIL ABSENSI (LOKASI & WAKTU) - BANK SULSELBAR", periode,
+            "Informasi lokasi dan waktu hanya untuk admin.",
+            total_kolom=("Uang Makan",),
+        )
     return buf.getvalue()
 
 
@@ -338,16 +524,36 @@ def halaman_absen(eng, nama):
         disabled=True,
     )
 
+    flash = st.session_state.pop("flash_absen", None)
+    if flash:
+        st.success(flash[0])
+        for baris in flash[1:]:
+            st.info(baris)
+
+    # Urutan otomatis: belum absen -> MASUK, sudah masuk -> PULANG, sudah keduanya -> selesai
+    hari_ini = datetime.now(WITA).strftime("%Y-%m-%d")
+    sudah_masuk = sudah_berhasil(eng, nama, hari_ini, "masuk")
+    if sudah_berhasil(eng, nama, hari_ini, "pulang"):
+        if not flash:
+            st.success("✅ Absen hari ini sudah lengkap (masuk dan pulang). Terima kasih!")
+        return
+
+    jenis = "pulang" if sudah_masuk else "masuk"
+    st.subheader(f"Absen {jenis.capitalize()}")
+    if sudah_masuk:
+        st.caption("Absen masuk hari ini sudah tercatat. Sekarang waktunya absen pulang.")
+
     lokasi = get_geolocation()
     coords = (lokasi or {}).get("coords")
     if coords:
-        st.success(f"📡 Lokasi terdeteksi (akurasi ±{coords.get('accuracy', 0):.0f} m)")
+        st.success("📡 Lokasi terdeteksi.")
     else:
         st.info("Menunggu lokasi... klik **Allow/Izinkan** saat browser meminta akses lokasi.")
 
-    foto = st.camera_input("Foto selfie untuk absen")
+    # key berbeda untuk masuk/pulang & tiap hari, supaya foto lama tidak ikut terpakai
+    foto = st.camera_input("Foto selfie untuk absen", key=f"foto_{nama}_{hari_ini}_{jenis}")
 
-    if st.button("Absen Sekarang", type="primary", width="stretch"):
+    if st.button(f"Absen {jenis.capitalize()} Sekarang", type="primary", width="stretch"):
         if not coords:
             st.error("Lokasi belum terdeteksi. Aktifkan GPS/izin lokasi lalu coba lagi.")
             return
@@ -358,35 +564,40 @@ def halaman_absen(eng, nama):
         now = datetime.now(WITA)
         tanggal, jam = now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S")
 
-        if sudah_berhasil(eng, nama, tanggal, "masuk"):
-            st.warning("Kamu sudah absen masuk hari ini.")
+        if sudah_berhasil(eng, nama, tanggal, jenis):
+            st.warning(f"Kamu sudah absen {jenis} hari ini.")
             return
-
-        if now.time() > BATAS_JAM_MASUK:
+        if jenis == "pulang" and not sudah_berhasil(eng, nama, tanggal, "masuk"):
+            st.error("Belum ada absen masuk yang berhasil hari ini, jadi absen pulang belum bisa.")
+            return
+        if jenis == "masuk" and now.time() > BATAS_JAM_MASUK:
             st.error(
-                f"❌ Absen ditolak: sudah lewat jam {BATAS_JAM_MASUK.strftime('%H:%M')} WITA "
-                f"(sekarang {now.strftime('%H:%M')})."
+                f"❌ Absen masuk ditolak: sudah lewat batas jam masuk "
+                f"({BATAS_JAM_MASUK.strftime('%H:%M')} WITA)."
             )
             return
 
         lat, lon = coords["latitude"], coords["longitude"]
         cocok, jarak = cek_lokasi(lat, lon, gedung)
         status = "berhasil" if cocok else "gagal_lokasi"
-        uang = UANG_MAKAN if cocok else 0
+        uang = UANG_MAKAN if (cocok and jenis == "pulang") else 0  # uang makan muncul saat absen pulang
 
         simpan_absen(
-            eng, nama=nama, tanggal=tanggal, jam=jam, jenis="masuk",
+            eng, nama=nama, tanggal=tanggal, jam=jam, jenis=jenis,
             lat=lat, lon=lon, akurasi=coords.get("accuracy"), jarak=jarak,
             status=status, uang_makan=uang, foto=kompres_foto(foto.getvalue()),
         )
 
         if cocok:
-            st.success(f"✅ Absen masuk berhasil pukul {jam} WITA.")
-            st.info(f"💰 Uang makan hari ini: Rp{uang:,}".replace(",", "."))
+            pesan = [f"✅ Absen {jenis} berhasil."]
+            if uang:
+                pesan.append(f"💰 Uang makan hari ini tercatat: {rupiah(uang)}")
+            st.session_state["flash_absen"] = pesan
+            st.rerun()
         else:
             st.error(
-                f"❌ Absen GAGAL: kamu ~{jarak:.0f} m dari Gedung {gedung}, "
-                "di luar area yang diizinkan. Pastikan kamu sudah di gedung lalu coba lagi."
+                f"❌ Absen gagal: kamu terdeteksi di luar area Gedung {gedung}. "
+                "Pastikan kamu sudah berada di gedung lalu coba lagi."
             )
 
 
@@ -484,56 +695,64 @@ def halaman_kelola_peserta(eng):
 # HALAMAN ADMIN: REKAP, GRAFIK, EXPORT
 # ------------------------------------------------------------------
 def halaman_rekap(eng):
-    st.header("📊 Rekap Absensi Masuk & Uang Makan")
+    st.header("📊 Rekap Kehadiran & Uang Makan")
     if not admin_login():
         return
 
     hari_ini = datetime.now(WITA).date()
     c1, c2 = st.columns(2)
-    bulan = c1.selectbox("Bulan", list(range(1, 13)), index=hari_ini.month - 1)
+    bulan = c1.selectbox("Bulan", list(range(1, 13)), index=hari_ini.month - 1, format_func=lambda m: BULAN_ID[m - 1])
     tahun = c2.number_input("Tahun", value=hari_ini.year, step=1)
+    bulan, tahun = int(bulan), int(tahun)
 
-    df = get_absensi_bulan(eng, int(tahun), int(bulan))
+    df = get_absensi_bulan(eng, tahun, bulan)
     if df.empty:
         st.info("Belum ada data absensi di bulan ini.")
         return
 
+    peserta_df = list_peserta(eng)
+    harian = rekap_harian(df)
+    per_peserta = rekap_peserta(df)
     berhasil = df[df["status"] == "berhasil"]
-    rekap = (
-        berhasil
-        .groupby("nama")
-        .agg(hari_hadir=("tanggal", "nunique"), total_uang_makan=("uang_makan", "sum"))
-        .reset_index()
-    )
-    rekap.columns = ["Nama", "Hari Hadir", "Total Uang Makan"]
 
-    m1, m2 = st.columns(2)
-    m1.metric("Total uang makan bulan ini", f"Rp{int(rekap['Total Uang Makan'].sum()):,}".replace(",", "."))
-    m2.metric("Percobaan absen gagal lokasi/telat", int((df["status"] != "berhasil").sum()))
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total uang makan bulan ini", rupiah(per_peserta["Total Uang Makan"].sum()))
+    m2.metric("Peserta yang hadir", int(berhasil[berhasil["jenis"] == "masuk"]["nama"].nunique()))
+    m3.metric("Percobaan gagal / ditolak", int((df["status"] != "berhasil").sum()))
 
-    st.subheader("Total Uang Makan per Peserta")
-    st.dataframe(beri_nomor(rekap), width="stretch")
+    tab_uang, tab_hadir, tab_detail = st.tabs(["💰 Uang Makan", "🗓️ Kehadiran", "📍 Lokasi & Waktu"])
 
-    st.subheader("Grafik")
-    if not rekap.empty:
-        st.caption("Hari hadir per peserta")
-        st.bar_chart(rekap.set_index("Nama")["Hari Hadir"])
-    harian = berhasil.groupby("tanggal").size()
-    if not harian.empty:
-        st.caption("Jumlah peserta yang hadir per hari")
-        st.bar_chart(harian)
+    with tab_uang:
+        st.subheader("Akumulasi Uang Makan per Hari")
+        if harian.empty:
+            st.info("Belum ada absen pulang yang berhasil. Uang makan tercatat saat peserta absen pulang.")
+        else:
+            st.dataframe(beri_nomor(harian), width="stretch")
+            st.caption("Uang makan per hari")
+            st.bar_chart(harian.set_index("Tanggal")["Uang Makan Hari Ini"])
+            st.caption("Akumulasi uang makan")
+            st.line_chart(harian.set_index("Tanggal")["Akumulasi Uang Makan"])
+        st.subheader("Total per Peserta")
+        st.dataframe(beri_nomor(per_peserta), width="stretch")
 
-    st.subheader("Detail Absensi")
-    detail = df.rename(columns={
-        "nama": "Nama", "tanggal": "Tanggal", "jam": "Jam", "jenis": "Jenis",
-        "status": "Status", "jarak": "Jarak (m)", "uang_makan": "Uang Makan",
-    })
-    detail["Jarak (m)"] = detail["Jarak (m)"].round(0)
-    st.dataframe(beri_nomor(detail), width="stretch")
+    with tab_hadir:
+        st.subheader("Rekapan Kehadiran")
+        st.caption("✓ = masuk dan pulang  •  M = hanya masuk  •  kosong = tidak hadir")
+        st.dataframe(beri_nomor(matriks_kehadiran(df, peserta_df, tahun, bulan)), width="stretch")
+
+    with tab_detail:
+        st.subheader("Lokasi & Waktu Absensi")
+        st.caption("Informasi ini hanya bisa dilihat admin.")
+        st.dataframe(
+            beri_nomor(tabel_detail(df)),
+            width="stretch",
+            column_config={"Peta": st.column_config.LinkColumn("Peta", display_text="Buka peta")},
+        )
 
     st.download_button(
-        "⬇️ Download Excel", data=excel_bytes(rekap, detail),
-        file_name=f"rekap_absensi_{int(tahun)}_{int(bulan):02d}.xlsx",
+        "⬇️ Download Excel",
+        data=excel_bytes(df, peserta_df, tahun, bulan),
+        file_name=f"rekap_absensi_{tahun}_{bulan:02d}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
