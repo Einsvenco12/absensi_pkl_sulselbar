@@ -1,4 +1,4 @@
-    tahun = c2.number_input("Tahun", value=hari_ini.year, step=1)
+tahun = c2.number_input("Tahun", value=hari_ini.year, step=1)
 
     df = get_absensi_bulan(eng, int(tahun), int(bulan))
     if df.empty:
