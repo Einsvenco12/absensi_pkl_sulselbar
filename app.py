@@ -4,6 +4,7 @@ Aplikasi Absensi Peserta PKL - Bank Sulselbar (versi siap deploy)
 Fitur:
 - Layar login di awal: pilih peran. Peserta (nama + PIN) -> halaman absen saja; Admin (password) -> area admin
 - Absen MASUK lalu PULANG: foto selfie + lokasi GPS (urutan otomatis)
+- Foto harus ada wajah (deteksi wajah, bukan pengenalan); tanpa wajah ditolak dan tidak disimpan
 - Login PIN per peserta (dibuat admin)
 - Cek lokasi: harus di sekitar gedung yang terdaftar untuk peserta (A / B)
 - Setiap peserta juga punya Divisi (dipilih dari daftar, Gedung ikut otomatis)
@@ -70,7 +71,7 @@ DIVISI_GEDUNG = {
     "Divisi SKAI": "B",
 }
 
-BATAS_JAM_MASUK = dtime(23, 0)  # absen masuk harus sebelum jam ini (WITA), lewat = ditolak
+BATAS_JAM_MASUK = dtime(8, 0)  # absen masuk harus sebelum jam ini (WITA), lewat = ditolak
 
 WITA = timezone(timedelta(hours=8))  # server cloud pakai UTC, jadi jam dipaksa WITA
 
@@ -455,6 +456,59 @@ def excel_bytes(df, peserta_df, tahun, bulan):
     return buf.getvalue()
 
 
+@st.cache_resource
+def _muat_detektor_wajah():
+    import cv2
+    detektor = [
+        cv2.CascadeClassifier(cv2.data.haarcascades + nama)
+        for nama in ("haarcascade_frontalface_default.xml", "haarcascade_frontalface_alt2.xml")
+    ]
+    if any(d.empty() for d in detektor):
+        raise RuntimeError("file detektor wajah tidak ditemukan")
+    return detektor
+
+
+def jumlah_wajah(data: bytes):
+    """Jumlah wajah (menghadap depan) yang terdeteksi di foto; 0 kalau tidak ada wajah.
+    Mengembalikan None kalau pendeteksi tidak tersedia di server.
+    Ini DETEKSI saja (ada wajah atau tidak), bukan pengenalan siapa orangnya."""
+    try:
+        import cv2
+        import numpy as np
+        detektor = _muat_detektor_wajah()
+    except Exception:
+        return None
+
+    gambar = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE)
+    if gambar is None:
+        return 0
+    h, w = gambar.shape
+    if max(h, w) > 640:  # perkecil supaya cepat di server gratis
+        skala = 640 / max(h, w)
+        gambar = cv2.resize(gambar, (int(w * skala), int(h * skala)))
+        h, w = gambar.shape
+    gambar = cv2.equalizeHist(gambar)  # ratakan kontras (cahaya kurang / terlalu terang)
+    ukuran_min = max(30, int(min(h, w) * 0.10))
+
+    def cari(g, tetangga):
+        return max(
+            len(d.detectMultiScale(g, scaleFactor=1.1, minNeighbors=tetangga, minSize=(ukuran_min, ukuran_min)))
+            for d in detektor
+        )
+
+    n = cari(gambar, 4)
+    if n:
+        return n
+    # kepala sedikit miring: coba putar ±15° dengan ambang lebih ketat supaya tidak salah deteksi
+    for sudut in (15, -15):
+        putar = cv2.getRotationMatrix2D((w / 2, h / 2), sudut, 1.0)
+        miring = cv2.warpAffine(gambar, putar, (w, h), borderValue=int(gambar.mean()))
+        n = cari(miring, 8)
+        if n:
+            return n
+    return 0
+
+
 def kompres_foto(data: bytes) -> bytes:
     """Kecilkan foto (maks 640px, JPEG q70) supaya database tidak cepat penuh."""
     img = Image.open(io.BytesIO(data)).convert("RGB")
@@ -550,6 +604,7 @@ def halaman_absen(eng, nama):
     else:
         st.info("Menunggu lokasi... klik **Allow/Izinkan** saat browser meminta akses lokasi.")
 
+    st.caption("Pastikan wajahmu terlihat jelas dan menghadap kamera. Foto tanpa wajah akan ditolak.")
     # key berbeda untuk masuk/pulang & tiap hari, supaya foto lama tidak ikut terpakai
     foto = st.camera_input("Foto selfie untuk absen", key=f"foto_{nama}_{hari_ini}_{jenis}")
 
@@ -577,6 +632,18 @@ def halaman_absen(eng, nama):
             )
             return
 
+        data_foto = foto.getvalue()
+        wajah = jumlah_wajah(data_foto)
+        if wajah is None:
+            st.error("Pendeteksi wajah sedang tidak aktif di server. Hubungi admin.")
+            return
+        if wajah == 0:
+            st.error(
+                "❌ Wajah tidak terdeteksi di foto. Pastikan wajahmu terlihat jelas, menghadap kamera, "
+                "dan cahaya cukup, lalu ambil foto lagi."
+            )
+            return
+
         lat, lon = coords["latitude"], coords["longitude"]
         cocok, jarak = cek_lokasi(lat, lon, gedung)
         status = "berhasil" if cocok else "gagal_lokasi"
@@ -585,7 +652,7 @@ def halaman_absen(eng, nama):
         simpan_absen(
             eng, nama=nama, tanggal=tanggal, jam=jam, jenis=jenis,
             lat=lat, lon=lon, akurasi=coords.get("accuracy"), jarak=jarak,
-            status=status, uang_makan=uang, foto=kompres_foto(foto.getvalue()),
+            status=status, uang_makan=uang, foto=kompres_foto(data_foto),
         )
 
         if cocok:
