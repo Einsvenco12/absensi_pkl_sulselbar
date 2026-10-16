@@ -24,7 +24,6 @@ import hmac
 import io
 from datetime import datetime, date, time as dtime, timedelta, timezone
 from math import radians, sin, cos, sqrt, atan2
-from html import escape
 
 import pandas as pd
 import streamlit as st
@@ -563,422 +562,20 @@ def admin_login():
 # ------------------------------------------------------------------
 # HALAMAN: ABSEN (untuk peserta PKL)
 # ------------------------------------------------------------------
-# ------------------------------------------------------------------
-# DESAIN DASHBOARD PESERTA
-# ------------------------------------------------------------------
-HARI_ID = [
-    "Senin", "Selasa", "Rabu", "Kamis",
-    "Jumat", "Sabtu", "Minggu",
-]
-
-
-def css_dashboard_peserta():
-    st.markdown(
-        """
-        <style>
-        .stApp {
-            background: #f3f5fc;
-        }
-
-        .block-container {
-            max-width: 780px;
-            padding-top: 1.2rem;
-            padding-bottom: 3rem;
-        }
-
-        .presensi-hero {
-            background: linear-gradient(
-                120deg, #1564ee 0%, #254cdd 55%, #4136c9 100%
-            );
-            border-radius: 26px;
-            padding: 28px 26px 58px;
-            color: white;
-        }
-
-        .hero-top {
-            display: flex;
-            align-items: center;
-            gap: 13px;
-            margin-bottom: 30px;
-        }
-
-        .hero-icon {
-            width: 50px;
-            height: 50px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 16px;
-            background: rgba(255, 255, 255, 0.18);
-            font-size: 27px;
-        }
-
-        .hero-title {
-            font-size: 26px;
-            font-weight: 700;
-            line-height: 1.2;
-        }
-
-        .hero-brand {
-            margin-top: 5px;
-            font-size: 12px;
-            color: #dbe6ff;
-        }
-
-        .hero-greeting {
-            font-size: 17px;
-            color: #e4edff;
-            margin-bottom: 7px;
-        }
-
-        .hero-name {
-            font-size: 27px;
-            font-weight: 750;
-            line-height: 1.3;
-            overflow-wrap: anywhere;
-        }
-
-        .hero-meta {
-            margin-top: 9px;
-            font-size: 13px;
-            color: #e2eaff;
-            line-height: 1.7;
-        }
-
-        .attendance-card {
-            position: relative;
-            margin: -30px 14px 24px;
-            padding: 24px;
-            background: #ffffff;
-            border-radius: 25px;
-            box-shadow: 0 12px 35px rgba(38, 59, 120, 0.07);
-        }
-
-        .attendance-date-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 22px;
-        }
-
-        .attendance-date {
-            color: #59616f;
-            font-size: 15px;
-            line-height: 1.5;
-        }
-
-        .active-badge {
-            flex-shrink: 0;
-            background: #dcf9e9;
-            color: #1d956c;
-            padding: 6px 13px;
-            border-radius: 99px;
-            font-size: 13px;
-            font-weight: 700;
-        }
-
-        .attendance-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 14px;
-        }
-
-        .attendance-status {
-            min-height: 148px;
-            padding: 20px 10px;
-            border-radius: 21px;
-            text-align: center;
-        }
-
-        .status-masuk {
-            background: #eafbf4;
-            color: #24a987;
-        }
-
-        .status-pulang {
-            background: #fff0f3;
-            color: #dc708b;
-        }
-
-        .status-icon {
-            font-size: 28px;
-            margin-bottom: 8px;
-        }
-
-        .status-label {
-            font-size: 15px;
-            margin-bottom: 8px;
-        }
-
-        .status-value {
-            font-size: 18px;
-            font-weight: 750;
-            line-height: 1.4;
-        }
-
-        .attendance-notice {
-            margin-top: 17px;
-            padding: 16px;
-            border-radius: 17px;
-            background: #eff4ff;
-            color: #607cae;
-            text-align: center;
-            font-size: 14px;
-            line-height: 1.7;
-        }
-
-        .participant-menu {
-            background: white;
-            padding: 23px;
-            margin-bottom: 20px;
-            border-radius: 24px;
-            box-shadow: 0 8px 28px rgba(38, 59, 120, 0.04);
-        }
-
-        .participant-menu-title {
-            font-size: 21px;
-            font-weight: 700;
-            color: #293247;
-            margin-bottom: 21px;
-        }
-
-        .participant-menu-grid {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 10px;
-        }
-
-        .participant-menu-item {
-            text-align: center;
-            font-size: 12px;
-            color: #6b7280;
-            line-height: 1.5;
-        }
-
-        .participant-menu-icon {
-            width: 60px;
-            height: 60px;
-            margin: 0 auto 10px;
-            border-radius: 19px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 27px;
-        }
-
-        .menu-pink { background: #fff0f4; }
-        .menu-blue { background: #eaf8ff; }
-        .menu-green { background: #eaf9f2; }
-        .menu-purple { background: #f1edff; }
-
-        .menu-note {
-            margin-top: 18px;
-            font-size: 12px;
-            color: #8a93a5;
-        }
-
-        div.stButton > button[kind="primary"] {
-            background: #2858e6;
-            border: 0;
-            border-radius: 14px;
-            min-height: 48px;
-            font-weight: 650;
-        }
-
-        div[data-testid="stCameraInput"] {
-            border-radius: 18px;
-            overflow: hidden;
-        }
-
-        @media (max-width: 480px) {
-            .block-container {
-                padding-left: 1rem;
-                padding-right: 1rem;
-            }
-
-            .presensi-hero {
-                padding: 24px 20px 52px;
-            }
-
-            .hero-name {
-                font-size: 23px;
-            }
-
-            .attendance-card {
-                margin-left: 8px;
-                margin-right: 8px;
-                padding: 18px;
-            }
-
-            .attendance-date {
-                font-size: 12px;
-            }
-
-            .status-value {
-                font-size: 16px;
-            }
-
-            .participant-menu {
-                padding: 20px 14px;
-            }
-
-            .participant-menu-icon {
-                width: 48px;
-                height: 48px;
-                font-size: 23px;
-                border-radius: 15px;
-            }
-
-            .participant-menu-item {
-                font-size: 11px;
-            }
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def dashboard_peserta(nama, peserta, sudah_masuk, sudah_pulang):
-    css_dashboard_peserta()
-
-    sekarang = datetime.now(WITA)
-
-    if sekarang.hour < 11:
-        sapaan = "Selamat Pagi"
-    elif sekarang.hour < 15:
-        sapaan = "Selamat Siang"
-    elif sekarang.hour < 18:
-        sapaan = "Selamat Sore"
-    else:
-        sapaan = "Selamat Malam"
-
-    tanggal = (
-        f"{HARI_ID[sekarang.weekday()]}, "
-        f"{sekarang.day} {BULAN_ID[sekarang.month - 1]} "
-        f"{sekarang.year}"
-    )
-
-    # Escape data dinamis sebelum dimasukkan ke HTML.
-    nama_html = escape(str(nama))
-    divisi_html = escape(str(peserta["divisi"]))
-    gedung_html = escape(str(peserta["gedung"]))
-
-    # Tetap bisa digunakan jika database saat ini belum memiliki NIM.
-    nim = peserta.get("nim")
-    nim_html = (
-        f"NIM: {escape(str(nim))}<br>"
-        if nim else ""
-    )
-
-    status_masuk = "Sudah absen" if sudah_masuk else "Belum absen"
-    status_pulang = "Sudah absen" if sudah_pulang else "Belum absen"
-
-    if sudah_pulang:
-        keterangan = "Presensi hari ini sudah lengkap. Terima kasih!"
-    elif sudah_masuk:
-        keterangan = "Absen masuk tercatat. Silakan lakukan absen pulang."
-    else:
-        keterangan = "Silakan lakukan absen masuk dengan selfie dan GPS."
-
-    st.markdown(
-        f"""
-        <div class="presensi-hero">
-            <div class="hero-top">
-                <div class="hero-icon">◎</div>
-                <div>
-                    <div class="hero-title">Presensi</div>
-                    <div class="hero-brand">PKL · BANK SULSELBAR</div>
-                </div>
-            </div>
-            <div class="hero-greeting">{sapaan} 👋</div>
-            <div class="hero-name">{nama_html}</div>
-            <div class="hero-meta">
-                {nim_html}
-                Gedung {gedung_html} · {divisi_html}
-            </div>
-        </div>
-
-        <div class="attendance-card">
-            <div class="attendance-date-row">
-                <div class="attendance-date">▢ {tanggal}</div>
-                <div class="active-badge">Aktif</div>
-            </div>
-
-            <div class="attendance-grid">
-                <div class="attendance-status status-masuk">
-                    <div class="status-icon">↪</div>
-                    <div class="status-label">Masuk</div>
-                    <div class="status-value">{status_masuk}</div>
-                </div>
-                <div class="attendance-status status-pulang">
-                    <div class="status-icon">↗</div>
-                    <div class="status-label">Pulang</div>
-                    <div class="status-value">{status_pulang}</div>
-                </div>
-            </div>
-
-            <div class="attendance-notice">
-                {keterangan}<br>
-                Waktu dan lokasi pencatatan hanya dapat dilihat admin.
-            </div>
-        </div>
-
-        <div class="participant-menu">
-            <div class="participant-menu-title">Menu</div>
-            <div class="participant-menu-grid">
-                <div class="participant-menu-item">
-                    <div class="participant-menu-icon menu-pink">📅</div>
-                    Izin
-                </div>
-                <div class="participant-menu-item">
-                    <div class="participant-menu-icon menu-blue">📥</div>
-                    Approval<br>Izin
-                </div>
-                <div class="participant-menu-item">
-                    <div class="participant-menu-icon menu-green">✈️</div>
-                    Dinas Luar
-                </div>
-                <div class="participant-menu-item">
-                    <div class="participant-menu-icon menu-purple">📄</div>
-                    Usulan
-                </div>
-            </div>
-            <div class="menu-note">
-                Menu izin, approval, dinas luar, dan usulan belum tersedia.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 def halaman_absen(eng, nama):
+    st.header("📍 Absen PKL")
+
     peserta = get_peserta(eng, nama)
-
     if peserta is None:
-        st.error(
-            "Data kamu tidak ditemukan. "
-            "Silakan keluar lalu hubungi admin."
-        )
+        st.error("Data kamu tidak ditemukan (mungkin sudah dihapus admin). Silakan keluar lalu hubungi admin.")
         return
+    gedung, divisi = peserta["gedung"], peserta["divisi"]
 
-    gedung = peserta["gedung"]
-    divisi = peserta["divisi"]
-
-    hari_ini = datetime.now(WITA).strftime("%Y-%m-%d")
-
-    sudah_masuk = sudah_berhasil(
-        eng, nama, hari_ini, "masuk"
-    )
-    sudah_pulang = sudah_berhasil(
-        eng, nama, hari_ini, "pulang"
-    )
-
-    dashboard_peserta(
-        nama=nama,
-        peserta=peserta,
-        sudah_masuk=sudah_masuk,
-        sudah_pulang=sudah_pulang,
+    st.text_input("Nama", value=nama, disabled=True)
+    st.text_input(
+        "Gedung & Divisi (terdaftar, tidak bisa diubah)",
+        value=f"Gedung {gedung} • {divisi}",
+        disabled=True,
     )
 
     flash = st.session_state.pop("flash_absen", None)
@@ -987,24 +584,18 @@ def halaman_absen(eng, nama):
         for baris in flash[1:]:
             st.info(baris)
 
-    if sudah_pulang:
+    # Urutan otomatis: belum absen -> MASUK, sudah masuk -> PULANG, sudah keduanya -> selesai
+    hari_ini = datetime.now(WITA).strftime("%Y-%m-%d")
+    sudah_masuk = sudah_berhasil(eng, nama, hari_ini, "masuk")
+    if sudah_berhasil(eng, nama, hari_ini, "pulang"):
         if not flash:
-            st.success(
-                "✅ Absen hari ini sudah lengkap "
-                "(masuk dan pulang). Terima kasih!"
-            )
+            st.success("✅ Absen hari ini sudah lengkap (masuk dan pulang). Terima kasih!")
         return
 
     jenis = "pulang" if sudah_masuk else "masuk"
-
-    st.subheader(f"📷 Absen {jenis.capitalize()}")
-    st.caption(
-        "Ambil foto selfie dan izinkan akses lokasi "
-        "untuk melakukan presensi."
-    )
-
-    # Lanjutkan kode lama mulai dari:
-    # lokasi = get_geolocation()
+    st.subheader(f"Absen {jenis.capitalize()}")
+    if sudah_masuk:
+        st.caption("Absen masuk hari ini sudah tercatat. Sekarang waktunya absen pulang.")
 
     lokasi = get_geolocation()
     coords = (lokasi or {}).get("coords")
@@ -1336,19 +927,12 @@ def main():
 
     peran = st.session_state.get("peran")
     nama = st.session_state.get("nama_login")
-   if peran == "user" and nama:
-    kiri, kanan = st.columns([3, 1])
-
-    kiri.caption("BANK SULSELBAR · PRESENSI PKL")
-
-    if kanan.button(
-        "Keluar ↗",
-        key="keluar_user",
-        width="stretch",
-    ):
-        keluar()
-
-    halaman_absen(eng, nama)
+    if peran == "user" and nama:
+        kiri, kanan = st.columns([4, 1])
+        kiri.caption(f"Masuk sebagai {nama}")
+        if kanan.button("Keluar", key="keluar_user", width="stretch"):
+            keluar()
+        halaman_absen(eng, nama)
     elif peran == "admin" and st.session_state.get("admin_ok"):
         halaman_admin(eng)
     else:
