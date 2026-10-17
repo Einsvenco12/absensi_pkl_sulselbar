@@ -663,7 +663,7 @@ def admin_login():
 # HALAMAN: ABSEN (untuk peserta PKL)
 # ------------------------------------------------------------------
 def halaman_absen(eng, nama):
-    st.header("📍 Absen PKL")
+    st.markdown(html_judul("Presensi", "Foto selfie + lokasi gedung"), unsafe_allow_html=True)
 
     peserta = get_peserta(eng, nama)
     if peserta is None:
@@ -766,7 +766,7 @@ def halaman_absen(eng, nama):
 # HALAMAN ADMIN: KELOLA PESERTA
 # ------------------------------------------------------------------
 def halaman_kelola_peserta(eng):
-    st.header("👥 Kelola Peserta PKL")
+    st.markdown(html_judul("Kelola Peserta", "Tambah, ubah, dan hapus peserta PKL"), unsafe_allow_html=True)
     if not admin_login():
         return
 
@@ -865,7 +865,7 @@ def halaman_kelola_peserta(eng):
 # HALAMAN ADMIN: REKAP, GRAFIK, EXPORT
 # ------------------------------------------------------------------
 def halaman_rekap(eng):
-    st.header("📊 Rekap Kehadiran & Uang Makan")
+    st.markdown(html_judul("Rekap Kehadiran & Uang Makan", "Khusus admin"), unsafe_allow_html=True)
     if not admin_login():
         return
 
@@ -931,7 +931,7 @@ def halaman_rekap(eng):
 # HALAMAN ADMIN: BUKTI FOTO
 # ------------------------------------------------------------------
 def halaman_foto(eng):
-    st.header("🖼️ Bukti Foto Absensi")
+    st.markdown(html_judul("Bukti Foto Absensi", "Khusus admin"), unsafe_allow_html=True)
     if not admin_login():
         return
 
@@ -981,7 +981,13 @@ CSS = """<style>
 .ps-kuning{background:#fffbeb;color:#b45309}
 .ps-merah{background:#fef2f2;color:#b91c1c}
 .ps-info{margin-top:14px;background:#eff6ff;color:#1e40af;border-radius:14px;padding:12px 14px;text-align:center;font-size:.92rem;line-height:1.5}
-div[data-testid="stButton"] button{border-radius:14px;min-height:3rem;font-weight:600}
+.ps-judul{padding:14px 18px;margin-bottom:14px}
+.ps-judul .ps-brand{font-size:1.1rem}
+.ps-judul .ps-ico{float:left;margin-right:12px}
+.ps-jt{overflow:hidden;line-height:1.3;padding-top:2px}
+.ps-judul .ps-sub{margin-top:3px;font-weight:400}
+div[data-testid="stButton"] button,div[data-testid="stFormSubmitButton"] button{border-radius:14px;min-height:3rem;font-weight:600}
+button[kind="primary"],button[kind="primaryFormSubmit"],[data-testid="stBaseButton-primary"],[data-testid="stBaseButton-primaryFormSubmit"]{background:#2563eb !important;border-color:#2563eb !important;color:#fff !important}
 </style>"""
 
 
@@ -1024,6 +1030,15 @@ def html_hero(brand, sapa, nama, sub=""):
     return (
         f'<div class="ps-hero"><div class="ps-brand"><span class="ps-ico">📍</span>{_e(brand)}</div>'
         f'<div class="ps-hi">{_e(sapa)} 👋</div><div class="ps-nama">{_e(nama)}</div>{sub_html}</div>'
+    )
+
+
+def html_judul(judul, sub=""):
+    """Banner biru ringkas untuk judul halaman (selaras dengan beranda)."""
+    sub_html = f'<div class="ps-sub">{_e(sub)}</div>' if sub else ""
+    return (
+        f'<div class="ps-hero ps-judul"><div class="ps-brand"><span class="ps-ico">📍</span>'
+        f'<div class="ps-jt">{_e(judul)}{sub_html}</div></div></div>'
     )
 
 
@@ -1152,7 +1167,7 @@ def beranda_peserta(eng, nama):
 
 
 def halaman_riwayat(eng, nama):
-    st.header("🕘 Riwayat Presensi")
+    st.markdown(html_judul("Riwayat Presensi", "Presensi yang berhasil"), unsafe_allow_html=True)
     df = riwayat_peserta(eng, nama)
     if df.empty:
         st.info("Belum ada presensi yang berhasil.")
@@ -1161,7 +1176,7 @@ def halaman_riwayat(eng, nama):
 
 
 def halaman_profil(eng, nama):
-    st.header("👤 Profil")
+    st.markdown(html_judul("Profil", "Data diri peserta"), unsafe_allow_html=True)
     peserta = get_peserta(eng, nama)
     if peserta is None:
         st.error("Data kamu tidak ditemukan. Silakan keluar lalu hubungi admin.")
